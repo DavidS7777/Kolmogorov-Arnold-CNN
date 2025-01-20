@@ -1,15 +1,12 @@
 import torch
 import torch.nn as nn
 import numpy as np
-
 from kat_rational import KAT_Group
 
 #just one Layer -> Pooling is later
 class KANCNN(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, device="cuda"):
+    def __init__(self, in_channels, out_channels, kernel_size, device="cuda", mode=["swish", "swish"], num_groups=None):
         """
-        shape needs to be [B, L, C] from KAT
-
         
         Args:
 
@@ -19,9 +16,11 @@ class KANCNN(nn.Module):
         
         kernel_size(int) = 1d shape of kernel, kernel will be quadratic
 
-        filter(int) = number of filters
+        device(string) = device
 
-        channels(int) = number of channels of the picture (1=black and white, 3=rbg)
+        mode(list of strings) = initial activation function
+
+        num_groups(int) = the number of groups to divide in_channel with
 
 
         """
@@ -32,163 +31,213 @@ class KANCNN(nn.Module):
         self.out_channels = out_channels
         self.device = device
 
+        #assert in_channels % num_groups == 0, "Input Channels should be divisible by the number of groups"
 
-        
-        #for every filter there is a kernel matrix with in_channel depth
-        
-        functions = [KAT_Group(num_groups=1, mode="swish", device='cuda') for _ in range(out_channels * kernel_size * kernel_size * in_channels)]
+        if num_groups != None and in_channels >= num_groups and in_channels % num_groups == 0:
+            self.groups = num_groups
+        else:
+            #no grouping
+            self.groups = in_channels
 
-        # for f in range(out_channels): #number of filters
-        #     for a in range(kernel_size):
-        #         for b in range(kernel_size):
-        #             for c in range(in_channels):
-
-        #                 #according to paper swish produces best results, start without group KANS -> num_groups = kernel * kernel
-        #                 #3 x 3 Kernel means 9 groups
-        #                 functions.append(KAT_Group(num_groups=kernel_size*kernel_size, mode="swish", device='cuda'))
+        self.modes = mode
         
+
+        #for every filter there is a kernel matrix with num_groups depth, since every kernel weight operatres on in_c // groups channels at the same time
+        # functions = []
+        # for i in range(out_channels):
+        #     for j in range(kernel_size):
+        #         for k in range(kernel_size):
+                    
+        #             if j == kernel_size // 2 or k == kernel_size // 2:
+        #                 m = mode[1]
+        #             else:
+        #                 m = mode[0]    
+
+        #             group = KAT_Group(num_groups=1, mode=m, device='cuda')
+        #             functions.append(group)
+
+        functions = [KAT_Group(num_groups=1, mode=mode, device='cuda') for _ in range(out_channels * kernel_size * kernel_size * self.groups)]
         self.kernel = nn.ModuleList(functions)
         
-
+    
     def forward(self, input):
         
         """
-        
         Args:
-        
-        input: Image of Shape[batch, height, width, in_channels]
 
-        Returns:
+        input: Image of shape [Batch, Channels, Height, Width]
 
-        a gpu tensor of shape [out_channels][height][width] with out_channels feature maps
-        
         """
 
-        #make sure input is always in "batches"
-
         batch = input.shape[0]
-        height = input.shape[1]
-        width = input.shape[2]
+        height = input.shape[2]
+        width = input.shape[3]
+
         in_c = self.in_channels
         out_c = self.out_channels
         kernel_size = self.kernel_size
         kernel = self.kernel
+        device = self.device
+        groups = self.groups
 
-
-        if in_c != input.shape[3]:
-            raise ValueError("image channels do not match in_channels of Layer")
-        
-
-        pad_size = (kernel_size - 1) // 2
-        padded = nn.functional.pad(input, pad=[0, 0, pad_size, pad_size, pad_size, pad_size], mode="constant", value = 0)
-        
-
-        result = torch.zeros((out_c, height, width), device=self.device) #same dim because of padding
-        
-        for f in range(out_c): #for every filter
-
-            #go over every pixel -> even though KAN takes flattened sequence it's easier to move kernel matrix -> TODO can be optimized 
-            for i in range(height): #padding
-
-                for j in range(width): #padding
-
-                    for a in range(kernel_size):
-
-                        for b in range(kernel_size):
-
-                            for c in range(in_c): #one in channel at a time
-                                
-                                """
-                                first without batching 
-                                input needs to be (Tensor): 3D input tensor with shape (batch, length, channels)
-
-                                batch is of size 1
-                                length of size 1 since one pixel at a time
-                                channels of size 1 since one channel at a time (for now) -> NOTE: All channels at the same time produces the same result, but there will be less weights in Kernel (could be good or bad)
-
-                                """
-                                idx = f * in_c * kernel_size * kernel_size + c * kernel_size * kernel_size + a * kernel_size + b
-                                result[f, i, j] += kernel[idx](padded[:, i + a, j + b, c].unsqueeze(0).unsqueeze(0)).squeeze()
-
-                                
-
-        return result 
-    
-    def fast_forward(self, input):
-
-        batch = input.shape[0]
-        height = input.shape[1]
-        width = input.shape[2]
-        in_c = self.in_channels
-        out_c = self.out_channels
-        kernel_size = self.kernel_size
-        kernel = self.kernel
+        step = in_c // groups
 
         pad_size = (kernel_size - 1) // 2
-        padded = nn.functional.pad(input, pad=[0, 0, pad_size, pad_size, pad_size, pad_size], mode="constant", value = 0)
         
-
-        result = torch.zeros((out_c, height * width), device=self.device) #same dim because of padding
-
+        padded = nn.functional.pad(input, pad=[pad_size, pad_size, pad_size, pad_size], mode="constant", value = 0)
+        padded = padded.permute(0, 2, 3, 1)
+        result = torch.zeros((batch, out_c, height * width), device=device) #same dim because of padding
+        
         for f in range(out_c):
             for a in range(kernel_size):
                 for b in range(kernel_size):
-                    for c in range(in_c):
-                    
-                        idx = f * in_c * kernel_size * kernel_size + c * kernel_size * kernel_size + a * kernel_size + b
+                    for c in range(groups):
+                
+                        idx = f * groups * kernel_size * kernel_size + c * kernel_size * kernel_size + a * kernel_size + b #get corresponding Weight in "Matrix" from List
+                        
+                        """
+                        - for each img in batch -> compute one feature map at a time
+                        - for every feature map -> get corresponding weight and use it on every relevant pixel
+                        - kernel uses [B, L, C] and pixel of shape [B, H, W, C]
+                        - reshape [B, H, W, Step] to [B, H * W, Step] (channel is step long -> group computation)
+                        - input now [B, H * W, Step]
+                        - sum up channels to remove channel dim
+                        - result[batch, feature_map] += img after conv with shape [H * W]
 
-                        #print(result[f].shape)
-                        #res = kernel[idx](padded[:, a:a + height, b:b + width, c].reshape(batch, -1, 1))
-                        #print(res.shape)
-
-                        result[f] += kernel[idx](padded[:, a:a + height, b:b + width, c].reshape(batch, -1, 1)).squeeze()
+                        """
+                        
+                        #process step channels at a time -> needs channel dim, since problems with backprop when mutliple channel dims
+                        result[:, f] += torch.sum(kernel[idx]((padded[:, a:a + height, b:b + width, c:c+step].reshape(batch, -1)).unsqueeze(-1)).view(batch, -1, step), dim=-1)
         
-        return result.reshape(out_c, height, width)
+        return result.view(batch, out_c, height, width)
+    
+    
+    # def different_fwd(self, input):
         
+    #     batch = input.shape[0]
+    #     height = input.shape[2]
+    #     width = input.shape[3]
 
+    #     in_c = self.in_channels
+    #     out_c = self.out_channels
+    #     kernel_size = self.kernel_size
+    #     kernel = self.kernel
+    #     device = self.device
+    #     groups = self.groups
 
-
+    #     step = in_c // groups
+    #     pad_size = (kernel_size - 1) // 2
+    #     padded = nn.functional.pad(input, pad=[pad_size, pad_size, pad_size, pad_size], mode="constant", value = 0)
+    #     padded = padded.permute(0, 2, 3, 1)
+    #     result = torch.zeros((batch, out_c, height * width), device=device) #same dim because of padding
         
+    #     for f in range(out_c):
+    #         for a in range(kernel_size):
+    #             for b in range(kernel_size):
+    #                 idx = f * kernel_size * kernel_size + a * kernel_size + b #get corresponding Weight in "Matrix" from List
+
+    #                 # res = padded[:, a:a+height, b:b+width, :].reshape(batch, -1)
+    #                 # print(res.shape)
+    #                 # res = kernel[idx](res.unsqueeze(-1))
+    #                 # print(res.shape)
+    #                 # res = res.view(batch, -1, in_c)
+    #                 # print(res.shape)
+
+    #                 result[:, f] += torch.sum(kernel[idx]((padded[:, a:a+height, b:b+width, :].reshape(batch, -1)).unsqueeze(-1)).view(batch, -1, in_c), dim=-1)
+
+    #     #print("hier", result.shape)
+    #     return result.view(batch, out_c, height, width)
+
+    
     
 
-class SimpleModel(nn.Module):
-    def __init__(self, in_channels, num_classes, kernel_size, height, width):
-        super(SimpleModel, self).__init__()
-        self.layer1 = KANCNN(in_channels, 5, kernel_size)
-        self.pool = nn.MaxPool2d(kernel_size=(2, 2))
-        self.fc1 = nn.Linear((height // 2) * (width // 2) * 5, num_classes)
+# class SimpleModel(nn.Module):
+#     def __init__(self, in_channels, num_classes, kernel_size, height, width):
+#         super(SimpleModel, self).__init__()
+#         self.layer1 = KANCNN(in_channels, 3, kernel_size)
+#         self.pool = nn.MaxPool2d(kernel_size=(2, 2))
+#         self.flatten = nn.Flatten()
+#         self.fc1 = nn.Linear((height // 2) * (width // 2) * 3, num_classes)
     
+#     def forward(self, x):
+#         out = self.layer1(x)
+#         out = self.pool(out)
+
+#         out = self.flatten(out)
+        
+#         out = self.fc1(out)
+#         return out
+
+
+
+class KANet5(nn.Module):
+    def __init__(self, in_channels=1, out_channels=5, kernel_size=3, mode=["swish", "swish"], num_groups=None):
+
+        super(KANet5, self).__init__()
+
+        self.groups = num_groups
+        
+        self.conv1 = KANCNN(in_channels, out_channels, kernel_size, mode=mode, num_groups=num_groups)
+        self.conv2 = KANCNN(out_channels, out_channels * 2, 3, mode=mode, num_groups=num_groups)
+        
+
+        self.pool = nn.MaxPool2d((2, 2))
+
+        self.fc1 = nn.Linear((out_channels*2)*7*7, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+
     def forward(self, x):
-        out = self.layer1(x)
-        out = self.pool(out)
-        out = self.flatten(out)
-        out = self.fc1(out)
-        return out
 
+        x = self.conv1(x)
+        x = self.pool(x)
+        
+        x = self.conv2(x)
+        x = self.pool(x)    
+        
+        #flatten  
+        x = x.view(-1, x.shape[1]*7*7)
+        x = nn.functional.relu(self.fc1(x))
+        x = nn.functional.relu(self.fc2(x))
+        x = self.fc3(x)
+        
+        return x
 
+class KANet5_KAN(nn.Module):
+    def __init__(self, in_channels=1, out_channels=6, kernel_size=3, mode="swish"):
 
+        super(KANet5_KAN, self).__init__()
 
-def main():
-    original_image = torch.tensor([ [1, 2, 0, 1, 2], [3, 1, 1, 0, 0], [2, 0, 2, 3, 1], [0, 1, 3, 1, 0], [1, 2, 1, 0, 3] ], dtype=torch.float32)
-    padded_image = nn.functional.pad(original_image, pad=[1, 1, 1, 1], mode='constant', value=0)
-    # print(padded_image)
+        self.conv1 = KANCNN(in_channels, out_channels, kernel_size, mode=mode)
+        self.conv2 = KANCNN(6, 16, 3, mode=mode)
 
-    # print(padded_image.shape)
+        self.pool = nn.MaxPool2d((2, 2))
 
-    # print(padded_image[1][1].shape)
+        self.act1 = KAT_Group(1, "relu", "cuda")
+        self.fc1 = nn.Linear(16*7*7, 120)
+        self.act2 = KAT_Group(1, "relu", "cuda")
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
 
-    # Angenommen, img ist dein Bildtensor mit der Form (Höhe, Breite, Kanal)
-    img = torch.randn(256, 256, 3)  # Beispielbild mit zufälligen Werten
+    def forward(self, x):
 
-    print(img.shape)
-    print(img[2][4])
-    print(img[2][4].unsqueeze(0).unsqueeze(0))
-    print(img[2][4].unsqueeze(0).unsqueeze(0).shape)
+        
+        x = self.conv1(x)
+        x = self.pool(x)
 
-    # Die Kanäle aufsummieren
-    summed_img = torch.sum(img, dim=2)
+        x = self.conv2(x)
+        x = self.pool(x)     
 
-    print(summed_img.shape)  # Sollte (256, 256) ausgeben
+        #flatten  
+        x = x.view(-1, 16*7*7)
+        
+        x = self.fc1(x).unsqueeze(-1)
+        
+        x = self.act1(x).squeeze()
+        #x = self.fc1(x)
+        
+        x = self.act2(self.fc2(x).unsqueeze(-1)).squeeze()
+        #x = self.fc2(x)
+        x = self.fc3(x)
 
-
-#main()
+        return x
