@@ -1,0 +1,107 @@
+#1 5 3
+#128, 10
+#identity gelu: 83.5
+#tanh identity 83.0
+#tanh tanh: 83.9
+#tanh gelu: 83.2
+#sigmoid tanh: 83.8
+#sigmoid gelu: 83.9
+#gelu tanh: 84.6
+#gelu gelu: 84.0
+#swish tanh: 84.0
+
+#1 5 3
+#64, 20
+#identity gelu: 84.4
+#tanh identity 83.8
+#tanh tanh: 85.9
+#tanh gelu: 83.0
+#sigmoid tanh: 85.6
+#sigmoid gelu: 84.7
+#gelu tanh: 85.1
+#gelu gelu: 84.4
+#swish tanh: 84.8
+#swish swish 84.7
+
+#128, 10
+#tanh
+#1 6 3
+#6 output first layer -> 6 input second layer  
+#1 group (full grouping -> one group for all channels): 1m 10s -> 82.00%
+#2 groups : 2m 1s -> 83.87%
+#3 groups : 2m 50s -> 83.60%
+#4 groups (no grouping, since 6 % 4 != 0) : 5m 15s -> 84.53%
+
+#128, 10
+#tanh, gelu
+#1, 6, 3, 1 group
+#kernel even: 1m 9s -> 83.87%
+#kernel plus : 1m 5s -> 82.13%
+#kernel x: 1m 6s -> 82.2%
+
+#128, 10
+#1, 6, 3, full grouping
+#identity gelu
+    #even: 55s -> 81.67
+    #plus: 57s -> 82.67
+    #x: 58s -> 83.13
+#gelu identity
+    #even: 55s -> 83.46
+    #plus: 57s -> 83.26
+    #x: 57s -> 83.67
+#tanh identity
+    #even: 54s -> 84.93 <----------------------------------
+    #plus: 57s -> 83.2
+    #x: 58s -> 83.4
+#identity tanh:
+    #even 55s -> 80.8
+    #plus: 58s -> 83.0
+    #x: 58s -> 83.8
+#tanh tanh
+    #even: 55s -> 83.8 / 83.5
+    #plus: 58s -> 83.33 / 85
+    #x: 58s -> 84.2 / 83.6
+#tanh gelu
+    #even: 56s -> 83.4
+    #plus: 59s -> 83.2
+    #x: 59s -> 85.0 <----------------------------------
+#gelu tanh
+    #even: 56s -> 83.73
+    #plus: 59s -> 83.26
+    #x: 1m -> 84.4 <----------------------------------
+#sigmoid tanh
+    #even 56s -> 82
+    #plus 1m -> 83.53
+    #x: 1m -> 82.4
+#tanh sigmoid
+    #even 56s -> 84.8
+    #plus 1m -> 82.73
+    #x: 1m -> 83.6
+#sigmoid gelu:
+    #even 59s -> 82.6
+    #plus 57s -> 82.93
+    #x: 59s -> 82.46
+#gelu sigmoid:
+    #even: 59s -> 84.67 <----------------------------------
+    #plus: 58s -> 80.67
+    #x: 59s -> 82.46
+#gelu gelu:
+    #even: 59s -> 82.8 /83.13
+    #plus: 57s -> 83.46 / 84.13
+    #x: 1m -> 84.2 / 82.33
+#swish tanh:
+    #even 1m -> 81.93
+    #plus 59s -> 83.33
+    #x: 57s -> 80.86
+#tanh swish
+    #even 1m -> 84.66
+    #plus 1m -> 82.33
+    #x: 1m 1s -> 83.67
+#swish swish
+    #even 1m -> 81.8 / 82.0
+    #plus 58s -> 82.13 / 81.2
+    #x 1m 1s -> 79.8 / 82.46
+
+#alternating:
+#tanh gelu 83.06
+#gelu tanh 85.06
