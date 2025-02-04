@@ -1,0 +1,10 @@
+defaults:
+  - _self_
+  - model: KANet
+    
+training:
+  epochs: 20
+  optimizer: adam
+  log: True
+  size: 5000
+  learning_rate: 0.001
