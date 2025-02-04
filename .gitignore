@@ -1,5 +1,9 @@
 # .gitignore
 
-# Ignoriere Python Cache-Dateien
 __pycache__/
 *.py[cod]
+log/
+multirun/
+outputs/
+trace.json
+wandb/
