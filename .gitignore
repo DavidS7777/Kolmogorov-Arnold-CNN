@@ -7,3 +7,6 @@ multirun/
 outputs/
 trace.json
 wandb/
+build/
+dist/
+*.egg-info
