@@ -5,13 +5,11 @@
 // #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 // #define CHECK_LESS(x, y) TORCH_CHECK(x < y, #x " should be less than " #y)
 
-std::vector<torch::Tensor> ka_convolution_fwd(
+torch::Tensor ka_convolution_fwd(
   torch::Tensor x, 
   torch::Tensor n, 
   torch::Tensor d, 
-  int group,
-  int out_c,
-  int kernel_size);
+  int group);
 
 torch::Tensor rational_fwd_cuda_1dgroup(
   torch::Tensor x, 
@@ -37,6 +35,3 @@ std::vector<torch::Tensor> rational_bwd_cuda_1dgroup(
   int group,
   int numerator,
   int denominator);
-
-
-
