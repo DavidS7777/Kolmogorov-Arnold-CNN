@@ -7,3 +7,4 @@ kernel_size: 3
 bias: False
 num: -1
 denom: -1
+halfsteps: False

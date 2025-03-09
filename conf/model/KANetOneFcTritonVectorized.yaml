@@ -1,4 +1,4 @@
-name: KANetConvConvC
+name: KANetOneFcTritonVectorized
 batch_size: 512
 in_channels: 1
 hidden_channels: 6
@@ -7,6 +7,3 @@ kernel_size: 3
 plot: False
 num: 5
 denom: 4
-init: n
-strength: 0.01
-halfsteps: False

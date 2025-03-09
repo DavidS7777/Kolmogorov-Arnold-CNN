@@ -10,3 +10,5 @@ training:
   learning_rate: 0.001
   tag: None
   name: None
+  decay: 0
+  dataset: Fashion-MNIST

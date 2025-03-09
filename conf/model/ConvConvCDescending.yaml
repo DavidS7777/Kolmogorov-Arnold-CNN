@@ -1,4 +1,4 @@
-name: KANetConvConvC
+name: KANetConvConvCDescending
 batch_size: 512
 in_channels: 1
 hidden_channels: 6
