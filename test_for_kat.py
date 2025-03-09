@@ -14,299 +14,21 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 if torch.cuda.is_available():
     torch.cuda.set_device(0)
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+from plotting import *
+from weight_inits import *
 
 import wandb
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-def plot_activations(curr_channel, kernel_size, axs, kernel):
-        
-        
-        for i in range(kernel_size):
-            for j in range(kernel_size):
 
-                if kernel_size == 1:
-                    axs[i].cla()
-                else:
-                    axs[i, j].cla()
-
-                x = torch.linspace(-2, 2, 100).to(device)
-                x = x.unsqueeze(0).unsqueeze(0)
-                idx = curr_channel * kernel_size * kernel_size + i * kernel_size + j
-
-                y = kernel[idx](x)
-                
-                x = x.squeeze(0).squeeze(0)
-                y = y.squeeze(0).squeeze(0)
-
-                if kernel_size == 1:
-                    axs[i].plot(x.detach().cpu().numpy(), y.detach().cpu().numpy())
-                else:
-                    axs[i, j].plot(x.detach().cpu().numpy(), y.detach().cpu().numpy())
-        
-        
-        return
-
-
-def plot_pre(model, layer):
-
-    in_c = model.in_c
-    hidden_c = model.hidden_c
-    ker = model.ker_size
-
-    figures = []
-
-    if layer == 1:
-
-        for i in range(in_c):
-            fig, axs = plt.subplots(ker, ker * 2, figsize=(20, 6))
-            figures.append((fig, axs))
-            fig.text(0.3, 0.95, "Inital Kernel Functions " + str(i + 1), ha="center")
-
-            if ker == 1:
-                plot_activations(i, ker, axs[:ker], model.conv1.kernel)
-            else:
-
-                plot_activations(i, ker, axs[:, :ker], model.conv1.kernel)
-
-    elif layer == 2:
-
-        for i in range(hidden_c):
-            fig, axs = plt.subplots(ker, ker * 2, figsize=(20, 6))
-            figures.append((fig, axs))
-            fig.text(0.3, 0.95, "Inital Kernel Functions " + str(i + 1), ha="center")
-            if ker == 1:
-                plot_activations(i, ker, axs[:ker], model.conv2.kernel)
-            else:
-                plot_activations(i, ker, axs[:, :ker], model.conv2.kernel)
-    
-    return figures
-    
-def plot_post(model, layer, figures, path=""):
-
-    in_c = model.in_c
-    hidden_c = model.hidden_c
-    ker = model.ker_size
-
-    if layer == 1:
-        for i in range(in_c):
-            fig, axs = figures[i]
-            if ker == 1:
-                plot_activations(i, ker, axs[ker:], model.conv1.kernel)
-            else:
-                plot_activations(i, ker, axs[:, ker:], model.conv1.kernel)
-            fig.text(0.7, 0.95, "After train", ha="center")
-            fig.savefig(path + "PostConv1" + str(i + 1) + ".png")
-
-    elif layer == 2:
-        for i in range(hidden_c):
-            fig, axs = figures[i]
-            if ker == 1:
-                plot_activations(i, ker, axs[ker:], model.conv2.kernel)
-            else:
-                plot_activations(i, ker, axs[:, ker:], model.conv2.kernel)
-
-            fig.text(0.7, 0.95, "After train", ha="center")
-            fig.savefig(path + "PostConv2" + str(i + 1) + ".png")
-
-
-def init_weights(model, two_conv=False, C=False):
-
-    in_c = model.in_c
-    hidden_c = model.hidden_c
-    ker_size = model.ker_size
-    out_c = model.out_c
-
-    skip = False
-
-    if hidden_c == -1:
-        hidden_c = out_c
-        skip = True
-
-    if not two_conv:
-        inits = LeNet5(in_c, hidden_c, ker_size, out_c, False).to(device)
-        params = []
-        for f in range(hidden_c):
-            for c in range(in_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * in_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv1.weight[f, c, i, j]
-                        if C:
-                            params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
-                        else:
-                            model.conv1.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-
-        if C:
-            model.conv1.nums= nn.Parameter(torch.cat(params, dim=0))
-
-        if skip:
-            return
-
-        params = []
-        for f in range(out_c):
-            for c in range(hidden_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * hidden_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv2.weight[f, c, i, j]
-                        if C:
-                            params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
-                        else:
-                            model.conv2.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-        if C:
-            model.conv2.nums= nn.Parameter(torch.cat(params, dim=0))
-
-    else:
-        inits = LeNet5ConvConv(in_c, hidden_c, ker_size, out_c, False).to(device)
-
-        params = []
-
-        for f in range(hidden_c // 2):
-            for c in range(in_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * in_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv1.weight[f, c, i, j]
-                        if C:
-                            params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
-                        else:
-                            model.conv1.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-
-        if C:
-            model.conv1.nums= nn.Parameter(torch.cat(params, dim=0))                         
-        
-        params = []
-        for f in range(hidden_c):
-            for c in range(hidden_c // 2):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * hidden_c // 2 * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv2.weight[f, c, i, j]
-                        if C:
-                            params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
-                        else:
-                            model.conv2.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-
-        if C:
-            model.conv2.nums= nn.Parameter(torch.cat(params, dim=0))
-
-        params = []
-        for f in range(out_c // 2):
-            for c in range(hidden_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * hidden_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv3.weight[f, c, i, j]
-                        if C:
-                            params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
-                        else:
-                            model.conv3.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-
-        if C:
-            model.conv3.nums= nn.Parameter(torch.cat(params, dim=0))
-        params = []
-        for f in range(out_c):
-            for c in range(out_c // 2):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * out_c // 2 * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv4.weight[f, c, i, j]
-                        if C:
-                            params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
-                        else:
-                            model.conv4.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-        if C:
-            model.conv4.nums= nn.Parameter(torch.cat(params, dim=0))
-    return
-
-#not yet implemented for C
-def double_init(model, two_conv=False):
-
-    in_c = model.in_c
-    hidden_c = model.hidden_c
-    ker_size = model.ker_size
-    out_c = model.out_c
-
-    skip = False
-
-    if hidden_c == -1:
-        hidden_c = out_c
-        skip = True
-
-    if not two_conv:
-        inits = LeNet5(in_c, hidden_c, ker_size, out_c, False).to(device)
-
-        for f in range(hidden_c):
-            for c in range(in_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * in_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv1.weight[f, c, i, j]
-                        model.conv1.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-
-        if skip:
-            return
-    
-        for f in range(out_c):
-            for c in range(hidden_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * hidden_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        w = inits.conv2.weight[f, c, i, j]
-                        model.conv2.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
-    else:
-        inits_num = LeNet5ConvConv(in_c, hidden_c, ker_size, out_c, False).to(device)
-        inits_denom = LeNet5ConvConv(in_c, hidden_c, ker_size, out_c, False).to(device)
-
-        for f in range(hidden_c // 2):
-            for c in range(in_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * in_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        n = inits_num.conv1.weight[f, c, i, j]
-                        d = inits_denom.conv1.weight[f, c, i, j]
-                        model.conv1.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, n, 0.0, 0.0, 0.0, 0.0]).to(device))
-                        model.conv1.kernel[idx].weight_denominator = nn.Parameter(torch.tensor([d, 0.0, 0.0, 0.0]).to(device))
-        
-        for f in range(hidden_c):
-            for c in range(hidden_c // 2):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * hidden_c // 2 * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        n = inits_num.conv2.weight[f, c, i, j]
-                        d = inits_denom.conv2.weight[f, c, i, j]
-                        model.conv2.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, n, 0.0, 0.0, 0.0, 0.0]).to(device))
-                        model.conv2.kernel[idx].weight_denominator = nn.Parameter(torch.tensor([d, 0.0, 0.0, 0.0]).to(device))
-        
-        for f in range(out_c // 2):
-            for c in range(hidden_c):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * hidden_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        n = inits_num.conv3.weight[f, c, i, j]
-                        d = inits_denom.conv3.weight[f, c, i, j]
-                        model.conv3.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, n, 0.0, 0.0, 0.0, 0.0]).to(device))
-                        model.conv3.kernel[idx].weight_denominator = nn.Parameter(torch.tensor([d, 0.0, 0.0, 0.0]).to(device))
-
-        for f in range(out_c):
-            for c in range(out_c // 2):
-                for i in range(ker_size):
-                    for j in range(ker_size):
-                        idx = f * out_c // 2 * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
-                        n = inits_num.conv4.weight[f, c, i, j]
-                        d = inits_denom.conv4.weight[f, c, i, j]
-                        model.conv4.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, n, 0.0, 0.0, 0.0, 0.0]).to(device))
-                        model.conv4.kernel[idx].weight_denominator = nn.Parameter(torch.tensor([d, 0.0, 0.0, 0.0]).to(device))
-
-    return
-
+def cleanup(sig, frame):
+    print("cleanup")
+    torch.cuda.empty_cache()
+    exit()
 
 import random
-
+import signal
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -320,17 +42,66 @@ def set_seed(seed):
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
 
+    signal.signal(signal.SIGTSTP, cleanup)
+
     import os
-    #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ['HYDRA_FULL_ERROR'] = '1'
 
-    #set_seed(42)
+    set_seed(42)
+
+    # batch = 1
+    # in_c = 1
+    # height = 2
+    # width = 2
+    # ker_size = 3
+    # out_c = 2
+
+    # set_seed(42)
+
+    # data = torch.randn(batch, in_c, height, width).to(device)
+
+    # set_seed(42)
+    
+    # m1 = KAConvC(in_c, out_c, ker_size).to(device)
+    
+    # set_seed(42)
+
+    # m2 = KAConvCComparision(in_c, out_c, ker_size).to(device)
+
+    # inits = nn.Conv2d(in_c, out_c, ker_size).to(device)
+    
+    # params = []
+    # for f in range(out_c):
+    #     for c in range(in_c):
+    #         for i in range(ker_size):
+    #             for j in range(ker_size):
+    #                 idx = f * in_c * ker_size * ker_size + c * ker_size * ker_size + i * ker_size + j
+    #                 w = inits.weight[f, c, i, j]
+    #                 params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
+    #                 #m1.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
+
+    # m1.nums= nn.Parameter(torch.cat(params, dim=0))
+    # m2.nums= nn.Parameter(torch.cat(params, dim=0))
+
+    # start = time.time()
+    # m1(data).sum().backward()
+    # print(time.time()-start)
+
+    # start = time.time()
+    # m2(data).sum().backward()
+    # print(time.time() - start)
+
+    # # print(res1.shape)
+    # # print(res2.shape)
+
+    # # print(torch.equal(res1, res2))
+
+
+    # exit()
 
     model = cfg.model
-
     name = model.name
-
-    
     batches = model.batch_size
     
     in_c = model.in_channels
@@ -339,18 +110,29 @@ def main(cfg: DictConfig) -> None:
     ker_size = model.kernel_size
 
     lr = cfg.training.learning_rate
+    weight_decay = cfg.training.decay
     num_epochs = cfg.training.epochs
     log = cfg.training.log
     optimizer = cfg.training.optimizer
     train_size = cfg.training.size
     plot = False
 
+    if cfg.training.dataset == "Fashion-MNIST":
+        height, width = 28, 28
+    elif cfg.training.dataset == "CIFAR10":
+        height, width = 32, 32
+    else:
+        raise NotImplementedError("Datset not implemented")
+    
     figuresc1 = []
     figuresc2 = []
+    figuresc3 = []
+    figuresc4 = []
 
     if name == "KANet":
         
         plot = model.plot
+        twoconv = False
         name += f"({model.num}, {model.denom})" 
         
         model = KANet5(in_c, hidden_c, ker_size, mode=['identity'], second_out=out_c, order=(model.num, model.denom)).to(device)
@@ -380,7 +162,8 @@ def main(cfg: DictConfig) -> None:
         init_weights(model)
     
     elif name == "LeNetOneFc":
-        model = LeNet5OneFc(in_c, hidden_c, ker_size, out_c).to(device)
+        model = LeNet5OneFc(in_c, hidden_c, ker_size, out_c, model.bias, height, width).to(device)
+        
     
     elif name == "SuperSimpleModel":
         model = SuperSimpleModel(in_c, out_c, ker_size, order=(model.num, model.denom)).to(device)
@@ -391,15 +174,31 @@ def main(cfg: DictConfig) -> None:
     
     elif name == "KANetOneFcC":
         name += f"({model.num}, {model.denom})"
-        model = KANet5OneFcC(in_c, hidden_c, ker_size, out_c, order=(model.num, model.denom)).to(device)
-        init_weights(model, C=True)
+        init_mode = model.init
+        init_strength = model.init_strength
+
+        model = KANet5OneFcC(in_c, hidden_c, ker_size, out_c, (model.num, model.denom), height, width).to(device)
+        if init_mode == "n":
+            
+            init_weights(model, False, True)
+        elif init_mode == "all":
+            all_init(model, True, init_strength, False)
+            
+        else:
+            raise NotImplementedError("InitMode not defined")
+        
+        
+        
         
     elif name == "LeNetConvConv":
-        model = LeNet5ConvConv(in_c, hidden_c, ker_size, out_c).to(device)
+        model = LeNet5ConvConv(in_c, hidden_c, ker_size, out_c, model.bias, model.halfsteps, height, width).to(device)
     
     elif name == "KANetConvConv":
         
         name += f"({model.num}, {model.denom})"
+        #name += f"AugmentedData"
+        plot = model.plot
+        twoconv = True
         
         init_mode = model.init
         name += f"({init_mode})"
@@ -407,11 +206,22 @@ def main(cfg: DictConfig) -> None:
         model = KANet5ConvConv(in_c, hidden_c, ker_size, out_c, (model.num, model.denom)).to(device)
 
         if init_mode == "n":
+            
             init_weights(model, True)
         elif init_mode == "both":
             double_init(model, True)
+        elif init_mode == "noinit":
+            pass
+
         else:
             raise NotImplementedError("InitMode not defined")
+            
+
+        if plot:
+            figuresc1 = plot_pre(model, 1, True)
+            figuresc2 = plot_pre(model, 2, True)
+            figuresc3 = plot_pre(model, 3, True)
+            figuresc4 = plot_pre(model, 4, True)
 
     elif name == "KANetOneFcTriton":
         model = KANet5OneFcTriton(in_c, hidden_c, ker_size, out_c).to(device)
@@ -419,32 +229,110 @@ def main(cfg: DictConfig) -> None:
     elif name == "KANetConvConvC":
 
         name += f"({model.num}, {model.denom})"
-        model = KANet5ConvConvC(in_c, hidden_c, ker_size, out_c, order=(model.num, model.denom)).to(device)
-        init_weights(model, True, True)
+        init_mode = model.init
+        init_strength = model.strength
+        name += f"({init_mode})"
     
+        halfsteps = model.halfsteps
+
+        model = KANet5ConvConvC(in_c, hidden_c, ker_size, out_c, order=(model.num, model.denom), halfsteps=halfsteps, height=height, width=width).to(device)
+        if init_mode == "n":
+            init_weights(model, True, True, False, halfsteps)
+        elif init_mode == "all":
+            all_init(model, True, init_strength)            
+        elif init_mode == "noinit":
+            pass
+        else:
+            raise NotImplementedError("InitMode not defined")
+        
     elif name == "KANetOneFcComparision":
         model = KANet5OneFcComparision(in_c, hidden_c, ker_size, out_c).to(device)
+        init_weights(model, False, True)
+    
+    elif name == "KANetOneFcTritonVectorized":
+        model = KANet5OneFcTritonVectorized(in_c, hidden_c, ker_size, out_c, order=(model.num, model.denom)).to(device)
 
+    elif name == "KANetOneConv":
+        plot = model.plot
+        model = KANetOneConv(in_c, out_c, ker_size, (model.num, model.denom), height, width).to(device)
+        init_weights(model, C=True, KANStarter=True)
+
+        if plot:
+            oneconv = True
+            twoconv = False
+            figuresc1 = plot_pre(model, 1, oneconv=True)
+
+    elif name == "KANetOneConvComparision":
+        model = KANetOneConvComparision(in_c, out_c, ker_size).to(device)
+    
+    elif name == "JustFc":
+        model = JustFc(in_c, out_c, ker_size, height, width).to(device)
+        
+    elif name=="ConvConvKANStarter":
+        model = ConvConvKANStarter(in_c, hidden_c, ker_size, out_c).to(device)
+        init_weights(model, C=True, KANStarter=True)
+    
+    elif name == "KANetConvConvComparision":
+        model = KANet5ConvConvComparision(in_c, hidden_c, ker_size, out_c).to(device)
+        init_weights(model, True, True)
+
+    elif name == "KANetConvConvCDescending":
+        model = KANet5ConvConvCDescending(in_c, hidden_c, ker_size, out_c, (model.num, model.denom), model.halfsteps).to(device)
+        init_weights(model, True, True, False, True, True)
+    
+    elif name == "ConvConvPool":
+        model = KANet5ConvConvPool(in_c, hidden_c, ker_size, out_c, (model.num, model.denom)).to(device)
+        init_weights(model, False, True)
+    elif name == "LeNetConvConvPool":
+        model = LeNet5CCPool(in_c, hidden_c, ker_size, out_c).to(device)
     else:
         raise NotImplementedError("Model not defined")
     
-    
 
-    (x_train, y_train), (x_test, y_test) = keras.datasets.fashion_mnist.load_data()
+    from torchvision import transforms
+    from sklearn.model_selection import train_test_split
+
+    # Define data augmentation
+    transform = transforms.Compose([
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.RandomResizedCrop(28)
+])
+
+    if cfg.training.dataset == "Fashion-MNIST":
+        (x_train, y_train), (x_test, y_test) = keras.datasets.fashion_mnist.load_data()
+    elif cfg.training.dataset == "CIFAR10":
+        (x_train, y_train), (x_test, y_test) = keras.datasets.cifar10.load_data()
+    else:
+        raise NotImplementedError("Dataset not implemented")
+
 
     #normalize
     x_train = x_train.astype(np.float32) / 255.0 
     x_test = x_test.astype(np.float32) / 255.0
  
-    x_train = torch.tensor(x_train[:train_size + train_size // 10]).unsqueeze(1) #add channel dim
+    x_train = torch.tensor(x_train[:train_size + train_size // 10])
+        
+    #print(len(x_train))
     y_train = torch.tensor(y_train[:train_size + train_size // 10], dtype=torch.long)
-    x_val = x_train[train_size:]
-    y_val = y_train[train_size:]
-    x_train = x_train[:train_size]
-    y_train = y_train[:train_size]
-    x_test = torch.tensor(x_test[:train_size // 5]).unsqueeze(1) #add channel dim
+
+    if cfg.training.dataset == "Fashion-MNIST":
+        x_train = x_train.unsqueeze(1) #add channel dim
+    elif cfg.training.dataset == "CIFAR10":
+        x_train = x_train.permute(0, 3, 1, 2)
+        y_train = y_train.squeeze()
+
+    x_train, x_val, y_train, y_val = train_test_split(x_train, y_train, test_size=0.1, random_state=42)
+
+    x_test = torch.tensor(x_test[:train_size // 5])
+
     y_test = torch.tensor(y_test[:train_size // 5], dtype=torch.long)
 
+    if cfg.training.dataset == "Fashion-MNIST":
+        x_test = x_test.unsqueeze(1) #add channel dim
+    elif cfg.training.dataset == "CIFAR10":
+        x_test = x_test.permute(0, 3, 1, 2)
+        y_test = y_test.squeeze()
 
     train_data = TensorDataset(x_train, y_train)
     test_data = TensorDataset(x_test, y_test)
@@ -454,43 +342,44 @@ def main(cfg: DictConfig) -> None:
     test_loader = DataLoader(dataset=test_data, batch_size=batches, shuffle=False, num_workers=4)
     val_loader = DataLoader(dataset=val_data, batch_size=batches, shuffle=False, num_workers=4)
 
-
+    
     if log:
         if cfg.training.name != "None":
             name += f"{cfg.training.name}"
+
         wandb.init(
             # set the wandb project where this run will be logged
             project="KA-CNN",
-            name= f"{name}, {in_c}, {hidden_c}, {ker_size}, {out_c}, {batches}, {lr}, {cfg.training.size}, {num_epochs}, {optimizer}",
+            name= f"{name}, {in_c}, {hidden_c}, {ker_size}, {out_c}, {batches}, {lr}, {cfg.training.size}, {num_epochs}, {optimizer}, {weight_decay}",
             tags = [],
-            
-
+                
             # track hyperparameters and run metadata
             config={
             "learning_rate": lr,
             "architecture": "CNN",
-            "dataset": "Fashion-MNIST",
+            "dataset": cfg.training.dataset,
             "epochs": num_epochs,
             }
         )
         if cfg.training.tag != "None":
             wandb.run.tags = [str(cfg.training.tag)]
-        
+            
 
     criterion = nn.CrossEntropyLoss()
 
     if optimizer == "adam":
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+            
     elif optimizer == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
+    import torch.autograd.profiler as profiler
 
     accuracy = -1
     
     start = time.time()
-            
+                
     for epoch in tqdm(range(num_epochs), desc="Training"):
 
         model.train()
@@ -501,32 +390,34 @@ def main(cfg: DictConfig) -> None:
 
         for (imgs, labels) in train_loader:
 
+            #imgs = transform(imgs)
+            
             imgs = imgs.to(device)
             labels = labels.to(device)
-                
-            pred = model(imgs)
-
-            loss = criterion(pred, labels)
-
-
+            
             optimizer.zero_grad()
-
+            pred = model(imgs)
+           
+            loss = criterion(pred, labels)
+            
+            #with profiler.profile(with_stack=True, use_cuda=True) as prof:
             loss.backward()
-                
+            
             optimizer.step()
 
-            running_loss += loss.item()
-
-            _, predicted = torch.max(pred.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            with torch.no_grad():
+                running_loss += loss.item()
+                
+                _, predicted = torch.max(pred.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
 
         avg_loss = running_loss / len(train_loader)
         accuracy = correct / total
 
         if log:
             wandb.log({"train_loss": avg_loss, "train_accuracy" : accuracy}, commit=False)
-            
+                
         model.eval()
         test_loss = 0.0
         correct = 0
@@ -540,23 +431,23 @@ def main(cfg: DictConfig) -> None:
                 scores = model(imgs)
                 loss = criterion(scores, labels)
                 test_loss += loss.item()
+                
                 _, pred = torch.max(scores.data, 1)
                 total += labels.size(0)
-                    
+                        
                 correct += (pred == labels).sum().item()
 
         avg_loss = test_loss / len(val_loader)
         accuracy = correct / total
 
-                
 
         if log:
             wandb.log({f"val_loss" : avg_loss, "val_accuracy" : accuracy})
-            
+                
     model.eval()
     correct = 0
     total = 0
-
+        
     with torch.no_grad():
         for (imgs, labels) in test_loader:
             imgs = imgs.to(device)
@@ -565,7 +456,7 @@ def main(cfg: DictConfig) -> None:
             scores = model(imgs)
             _, pred = torch.max(scores.data, 1)
             total += labels.size(0)
-                    
+                        
             correct += (pred == labels).sum().item()
 
     accuracy = correct / total      
@@ -574,20 +465,44 @@ def main(cfg: DictConfig) -> None:
         wandb.summary["test_accuracy"] = accuracy
         wandb.finish()
 
-            
+                
     end = time.time()
     print() #new line
-
+    
+    #print(prof.key_averages().table(sort_by="cuda_time_total"))
 
     print("Training time:", (end - start) // 60, "m", "%.2f" % ((end - start) % 60),  "s")
     print(accuracy)
-
-
+    
+    
     if plot:
-        plot_post(model, 1, figuresc1, "pics/")
-        plot_post(model, 2, figuresc2, "pics/")
+        if not twoconv and not oneconv:
+            plot_post(model, 1, figuresc1, "pics/")
+            plot_post(model, 2, figuresc2, "pics/")
+        
+        elif oneconv:
+            plot_post(model, 1, figuresc1, "pics/OneConv43/", False, True)
+            
+        else:
+            plot_post(model, 1, figuresc1, "pics/ConvConv/", True)
+            plot_post(model, 2, figuresc2, "pics/ConvConv/", True)
+            plot_post(model, 3, figuresc3, "pics/ConvConv/", True)
+            plot_post(model, 4, figuresc4, "pics/ConvConv/", True)
 
 
+import cProfile
+import pstats
+import io
    
 if __name__ == "__main__":
+
+    # profiler = cProfile.Profile()
+    # profiler.enable()
     main()
+    # profiler.disable()
+
+    # s = io.StringIO()
+    # sortby = 'cumulative'
+    # ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
+    # ps.print_stats(20)
+    # print(s.getvalue())
