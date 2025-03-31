@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from kat_rational import KAT_Group
 import kaconvolution_cu
+import kaconvolutiontest
 from kat_rational import rational_1dgroup
 from rational_triton import RationalTriton1DGroup
 import rational_triton_vectorized
@@ -9,10 +10,13 @@ from rational_triton_vectorized import RationalTritonVectorized
 import time
 import math
 
+
 class KaConvolution(torch.autograd.Function):
     @staticmethod
     @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, input, nums, denoms, group, numerator, denominator, x):
+
+        
 
         ctx.save_for_backward(input, nums, denoms)
         ctx.group = group
@@ -24,8 +28,7 @@ class KaConvolution(torch.autograd.Function):
     @staticmethod
     @torch.cuda.amp.custom_bwd
     def backward(ctx, grad_output):
-        # if not grad_output.is_contiguous():
-        #     grad_output = grad_output.contiguous()
+        
         
         torch.cuda.empty_cache()
         
@@ -33,8 +36,8 @@ class KaConvolution(torch.autograd.Function):
         
         group = ctx.group
         numerator = ctx.numerator
-        denominator = ctx.denominator
-        
+        denominator = ctx.denominator     
+
         max_weight = 800 #32 KB shared max
         if grad_output.shape[0] > max_weight:
 
@@ -58,6 +61,9 @@ class KaConvolution(torch.autograd.Function):
                 
                 res = kaconvolution_cu.ka_convolution_bwd(grad_out_part, x_part, n_part, d_part, group, numerator, denominator)
                 #torch.cuda.synchronize()
+
+                
+                
                 d_x_p.append(res[0])
                 d_n_p.append(res[1])
                 d_d_p.append(res[2])
@@ -70,14 +76,26 @@ class KaConvolution(torch.autograd.Function):
             
 
         else:
-        #start = time.time()
+        
             d_input, d_weight_numerator, d_weight_denominator = kaconvolution_cu.ka_convolution_bwd(grad_output, relevant_input, nums, denoms, group, numerator, denominator)       
-        #print("one iteration backward", time.time() - start, d_input.shape[0])
+            #torch.cuda.synchronize()
+
         torch.cuda.empty_cache()
+        
+        # H = int(math.sqrt(d_input.shape[2]))
+        # B = grad_output.shape[1]
+        # d_input = d_input.view(2, 3, -1, B, H, H).sum(dim=(0, 2)).permute(1, 0, 2, 3).contiguous()
+        # print(d_input)
+        # print(d_weight_numerator)
+        # print(d_weight_denominator)
+        #exit()
+
         return d_input, d_weight_numerator, d_weight_denominator, None, None, None, None
 
-
 def helper_method(input, nums, denoms, group, out_c, kernel_size, numerator, denominator):
+
+    
+    torch.cuda.empty_cache()
 
     batch = input.size(0)
     in_c = input.size(1)
@@ -89,18 +107,148 @@ def helper_method(input, nums, denoms, group, out_c, kernel_size, numerator, den
     padded = torch.nn.functional.pad(input, pad=[pad_size, pad_size, pad_size, pad_size], mode="constant", value = 0)
     
     step = in_c // group
-
+    
     #perform im2col tranformation to get part of the image that is relevant for each weight
-    relevant_inp = padded.unfold(2, height, 1).unfold(3, width, 1).contiguous().view(batch, -1, height * width, step).permute(1, 0, 2, 3).repeat(out_c, 1, 1, 1)
 
+    relevant_inp = padded.unfold(2, height, 1).unfold(3, width, 1).contiguous().view(batch, -1, height * width, step).permute(1, 0, 2, 3).repeat(out_c, 1, 1, 1).contiguous() #<- this is too big already
 
     result = kaconvolution_cu.ka_convolution_fwd(relevant_inp, nums, denoms, group)
     
     result = KaConvolution.apply(relevant_inp, nums, denoms, group, numerator, denominator, result) #needs to be saved for bwd -> rel_out needs to be returned by forward method for grad_output
 
+    torch.cuda.empty_cache()
+
     return result
 
 
+
+class KaConvolutionComparision(torch.autograd.Function):
+    @staticmethod
+    @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+    def forward(ctx, input, nums, denoms, out_channels, kernel_size, stride, numerator, denominator):
+
+        pad_size = (kernel_size - 1) // 2
+
+        padded = torch.nn.functional.pad(input, pad=[pad_size, pad_size, pad_size, pad_size], mode="constant", value = 0)
+
+        #ctx.save_for_backward(input, nums, denoms)
+        ctx.out_c = out_channels
+        ctx.numerator = numerator
+        ctx.denominator = denominator
+        ctx.kernel_size = kernel_size
+        ctx.stride = stride
+    
+        ctx.save_for_backward(padded, nums, denoms)
+
+        result = kaconvolutiontest.ka_convolution_fwd(padded, nums, denoms, out_channels, kernel_size, stride)
+       
+
+        return result
+    
+    @staticmethod
+    @torch.cuda.amp.custom_bwd
+    def backward(ctx, grad_output):
+        
+       
+        torch.cuda.empty_cache()
+        
+        padded, nums, denoms = ctx.saved_tensors
+
+        out_c = ctx.out_c
+        numerator = ctx.numerator
+        denominator = ctx.denominator
+        kernel_size = ctx.kernel_size
+        stride = ctx.stride
+
+        num_weights = padded.shape[1] * kernel_size * kernel_size
+        
+        #TODO slicing not 100% accurate results -> floats? -> with partitions faster to ignore shared memory -> if blockSize then 8*8 since 256*9*10*4 to big
+
+        # max_weight = 800 #32 KB shared max
+        # if nums.shape[0] > max_weight:
+
+
+        #     parallel_out_c = max_weight // num_weights
+        #     parallel_out_c = min(parallel_out_c, out_c)
+
+        #     partitions = math.ceil(out_c / parallel_out_c)
+
+        #     pad_size = (kernel_size - 1) // 2
+
+        #     d_x_p = torch.zeros(padded.shape[0], padded.shape[1], padded.shape[2] - 2 * pad_size, padded.shape[3] - 2 * pad_size, device="cuda")
+            
+        #     d_n_p = []
+        #     d_d_p = []
+
+        #     for i in range(partitions):
+                
+        #         torch.cuda.empty_cache() #everything previously used by the kernel is irrelevant for the calculation of the next batch
+        #         start_idx = i * parallel_out_c
+        #         end_idx = min((i + 1) * parallel_out_c, out_c)
+
+        #         out_c_part = end_idx - start_idx
+
+        #         grad_out_part = grad_output[:, start_idx:end_idx, :, :].contiguous()
+
+        #         x_part = padded
+
+        #         n_part = nums[start_idx * num_weights:end_idx * num_weights].contiguous()
+        #         d_part = denoms[start_idx * num_weights:end_idx * num_weights].contiguous()
+
+                
+        #         res = kaconvolutiontest.ka_convolution_bwd(grad_out_part, padded, n_part, d_part, out_c_part, kernel_size, stride, numerator, denominator)
+                
+        #         #print(grad_out_part)
+
+        #         d_x_p.add_(res[0])
+        #         d_n_p.append(res[1])
+        #         d_d_p.append(res[2])
+
+        #     #torch.cuda.empty_cache()
+            
+        #     #print(res[1])
+            
+        #     d_weight_numerator = torch.cat(d_n_p, 0)
+        #     d_weight_denominator = torch.cat(d_d_p, 0)
+        #     d_input = d_x_p
+
+        # else:
+        
+        d_input, d_weight_numerator, d_weight_denominator = kaconvolutiontest.ka_convolution_bwd(grad_output, padded, nums, denoms, out_c, kernel_size, stride, numerator, denominator)       
+            
+        torch.cuda.empty_cache()
+        
+        #torch.set_printoptions(sci_mode=False)
+        
+        # print(d_input)
+        # print(d_weight_numerator.sum())
+        # print(d_weight_denominator.sum())
+        # exit()
+
+        return d_input, d_weight_numerator, d_weight_denominator, None, None, None, None, None, None
+
+
+
+def helper_method_comp(input, nums, denoms, out_c, kernel_size, stride, numerator, denominator):
+
+
+    pad_size = (kernel_size - 1) // 2
+
+    padded = torch.nn.functional.pad(input, pad=[pad_size, pad_size, pad_size, pad_size], mode="constant", value = 0)
+    # step = in_c // group
+
+    # #perform im2col tranformation to get part of the image that is relevant for each weight
+    # relevant_inp = padded.unfold(2, height, 1).unfold(3, width, 1).contiguous().view(batch, -1, height * width, step)
+    
+    # relevant_inp = relevant_inp.permute(1, 0, 2, 3).contiguous()
+    
+
+    result = KaConvolutionComparision.apply(padded, nums, denoms, out_c, kernel_size, stride, numerator, denominator) #needs to be saved for bwd -> rel_out needs to be returned by forward method for grad_output
+    
+    #result = result.view(batch, -1, height, width)
+    
+
+    return result
 
 
 class KAConvC(nn.Module):
@@ -126,9 +274,9 @@ class KAConvC(nn.Module):
         num = torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0, 0.0], device="cuda")
         denom = torch.tensor([0.0, 0.0, 0.0, 0.0], device="cuda")
 
-        self.nums = nn.Parameter(torch.cat([nn.Parameter(num.view(1, -1).float(), requires_grad=True) for _ in range(out_channels * kernel_size * kernel_size * self.groups)], dim=0))
+        self.nums = nn.Parameter(torch.cat([nn.Parameter(num.view(1, -1).float(), requires_grad=True) for _ in range(out_channels * self.groups * kernel_size * kernel_size)], dim=0))
         
-        self.denoms = nn.Parameter(torch.cat([nn.Parameter(denom.view(1, -1).float(), requires_grad=True) for _ in range(out_channels * kernel_size * kernel_size * self.groups)], dim=0))
+        self.denoms = nn.Parameter(torch.cat([nn.Parameter(denom.view(1, -1).float(), requires_grad=True) for _ in range(out_channels * self.groups * kernel_size * kernel_size)], dim=0))
     
     def forward(self, input):
 
@@ -142,17 +290,59 @@ class KAConvC(nn.Module):
         
         # og = og.view(input.shape[0], self.out_channels, input.shape[2], input.shape[3])
 
-        og2 = torch.zeros((input.shape[0], self.out_channels, input.shape[2] * input.shape[3]), device="cuda")
         
-        for idx, res in enumerate(result):
-            f = idx // (self.kernel_size * self.kernel_size * self.in_channels) 
-            og2[:, f].add_(torch.sum(res, dim=-1))
+        # og2 = torch.zeros((input.shape[0], self.out_channels, input.shape[2] * input.shape[3]), device="cuda")
+        
+        # for idx, res in enumerate(result):
+        #     f = idx // (self.kernel_size * self.kernel_size * self.in_channels) 
+        #     og2[:, f].add_(torch.sum(res, dim=-1))
             
         
-        og2= og2.view(input.shape[0], self.out_channels, input.shape[2], input.shape[3])
+        # og2= og2.view(input.shape[0], self.out_channels, input.shape[2], input.shape[3])
 
-        return og2
+        og = result.view(self.out_channels, -1, result.shape[1], result.shape[2], result.shape[3])
+        og = og.sum(1)
+        og = og.permute(1,0,2,3).view(input.shape[0], self.out_channels, input.shape[2], input.shape[3])
 
+        
+        # print(og[0, 0, :, :])
+        # exit()
+        
+        return og
+
+class KAConvCComparision(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, order=(5, 4), stride=1):
+        
+        super(KAConvCComparision, self).__init__()
+
+        self.kernel_size = kernel_size
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+
+        #no grouping for now -> can't dynamically allocate in CUDA
+        self.groups = in_channels
+
+
+        step = in_channels // self.groups
+        self.step = step
+        self.stride = stride
+
+        self.numerator = order[0] + 1 if order[0] != -1 else -1
+        self.denominator = order[1]
+
+        num = torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0, 0.0], device="cuda")
+        denom = torch.tensor([0.0, 0.0, 0.0, 0.0], device="cuda")
+
+        self.nums = nn.Parameter(torch.cat([nn.Parameter(num.view(1, -1).float(), requires_grad=True) for _ in range(out_channels * self.groups * kernel_size * kernel_size)], dim=0))
+        
+        self.denoms = nn.Parameter(torch.cat([nn.Parameter(denom.view(1, -1).float(), requires_grad=True) for _ in range(out_channels * self.groups * kernel_size * kernel_size)], dim=0))
+    
+    def forward(self, input):
+
+        result = KaConvolutionComparision.apply(input, self.nums, self.denoms, self.out_channels, self.kernel_size, self.stride, self.numerator, self.denominator)
+
+        return result
 
 class KAConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, mode=["swish", "swish"], num_groups=None, order=(5, 4)):

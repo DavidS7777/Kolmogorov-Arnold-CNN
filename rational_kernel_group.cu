@@ -20,9 +20,6 @@ __global__ void rational_fwd_cuda_kernel_1dgroup(
     // Calculate the group index based on the position within dimension D
     int g_index = floor(d_index / D_per_group);
 
-    
-    
-
     // Calculate specific indices for a and b based on group
     int a_idx = w_index * 6;
     int b_idx = w_index * 4;
@@ -116,7 +113,7 @@ __global__ void rational_bwd_cuda_kernel_1dgroup(
     int D_per_group, 
     int numerator, 
     int denominator, 
-    int num_weights) {
+    int num_weights, int shared_mem_elements) {
     
     // Shared memory for accumulation
     // group < 32, so we can use 192 and 128 shared memory
@@ -125,23 +122,37 @@ __global__ void rational_bwd_cuda_kernel_1dgroup(
     // __shared__ float sda[32*6];
     // __shared__ float sdb[32*4];
     extern __shared__ float shared_mem[];
-    float* sda = shared_mem;
-    float* sdb = sda + (num_weights * 6);
+
+    // float* sda = shared_mem;
+    // float* sdb = sda + (num_weights * 6);
 
     // initialize shared memory to zero
-    if ( threadIdx.x == 0) {
-        #pragma unroll
-        for (int i = 0; i < num_weights * 6; ++i) {
-            sda[i] = 0;
-        }
-        #pragma unroll
-        for (int i = 0; i < num_weights * 4; ++i) {
-            sdb[i] = 0;
-        }
+
+    int tid = threadIdx.x;
+    int total_threads = blockDim.x;
+    // int shared_mem_size = num_weights * 10;
+
+    #pragma unroll
+    for (int i = tid; i < shared_mem_elements; i+=total_threads) {
+        shared_mem[i] = 0.0f;
     }
 
+    // if ( threadIdx.x == 0) {
+    //     #pragma unroll
+    //     for (int i = 0; i < num_weights * 6; ++i) {
+    //         sda[i] = 0;
+    //     }
+    //     #pragma unroll
+    //     for (int i = 0; i < num_weights * 4; ++i) {
+    //         sdb[i] = 0;
+    //     }
+    // }
+
+    
 
     __syncthreads();
+    float* sda = shared_mem;
+    float* sdb = sda + (num_weights * 6);
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -290,6 +301,7 @@ std::vector<torch::Tensor> rational_bwd_cuda_1dgroup(torch::Tensor grad_output, 
     int blockSize = 256;  // You might want to experiment with this value
     int numBlocks = (x_size + blockSize - 1) / blockSize;
     int shared_mem_size = (num_weights * 10) * sizeof(float);
+    int shared_mem_elements = num_weights * 10;
 
     AT_DISPATCH_FLOATING_TYPES_AND_HALF(x.scalar_type(), "rational_bwd_cuda_1dgroup", ([&] {
     rational_bwd_cuda_kernel_1dgroup<scalar_t>
@@ -301,7 +313,7 @@ std::vector<torch::Tensor> rational_bwd_cuda_1dgroup(torch::Tensor grad_output, 
             d_x.data_ptr<scalar_t>(),
             d_n.data_ptr<float>(),
             d_d.data_ptr<float>(),
-            B, L, D, group, x_size, n_size, d_size, D / group, numerator, denominator, num_weights);
+            B, L, D, group, x_size, n_size, d_size, D / group, numerator, denominator, num_weights, shared_mem_elements);
     }));
 
     return {d_x, d_n, d_d};

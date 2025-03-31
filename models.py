@@ -100,6 +100,49 @@ class KANet5(nn.Module):
         x = self.fc3(x)
         
         return x
+
+class KANet5C(nn.Module):
+    def __init__(self, in_channels=1, out_channels=6, kernel_size=3, second_out = 16, order=(5, 4), height=28, width=28):
+
+        super(KANet5C, self).__init__()
+
+        self.in_c = in_channels
+        self.hidden_c = out_channels
+        self.ker_size = kernel_size
+        self.out_c = second_out
+
+        self.conv1 = KAConvC(in_channels, out_channels, kernel_size, order=order)
+        self.conv2 = KAConvC(out_channels, second_out, kernel_size, order=order)
+        
+        self.pool = nn.MaxPool2d((2, 2))
+
+        self.fc1 = nn.Linear((second_out)*7*7, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+        self.relu = nn.ReLU()
+
+        
+
+    def forward(self, x):
+
+        x = self.conv1(x)
+        x = self.pool(x)
+        
+        x = self.conv2(x)
+        x = self.pool(x)    
+        
+        #flatten  
+        x = x.view(-1, x.shape[1]*7*7)
+        
+        x = self.fc1(x)
+        x = self.relu(x)
+
+        x = self.fc2(x)
+        x = self.relu(x)
+
+        x = self.fc3(x)
+        
+        return x
     
 class KANet5OneFc(nn.Module):
     def __init__(self, in_channels=1, out_channels=6, kernel_size=3, second_out = 16, order=(5, 4), height=28, width=28):
@@ -169,12 +212,55 @@ class KANet5OneFcC(nn.Module):
     def forward(self, x):
 
         x = self.conv1(x)
-        x = self.bn1(x)
+        #x = self.bn1(x)
         
         x = self.pool(x)
         
         x = self.conv2(x)
-        x = self.bn2(x)
+        #x = self.bn2(x)
+        
+        x = self.pool(x)    
+        
+        #flatten  
+        x = x.view(-1, x.shape[1]*self.h*self.w)
+        
+        x = self.fc1(x)
+        
+        return x 
+
+class KANet5OneFcCComparision(nn.Module):
+    def __init__(self, in_channels=1, out_channels=6, kernel_size=3, second_out = 16, order=(5, 4), height=28, width=28):
+
+        super(KANet5OneFcCComparision, self).__init__()
+
+        self.in_c = in_channels
+        self.hidden_c = out_channels
+        self.ker_size = kernel_size
+        self.out_c = second_out
+
+
+        self.conv1 = KAConvCComparision(in_channels, out_channels, kernel_size, order=order)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = KAConvCComparision(out_channels, second_out, kernel_size, order=order)
+        self.bn2 = nn.BatchNorm2d(second_out)
+
+        self.pool = nn.MaxPool2d((2, 2))
+
+        self.fc1 = nn.Linear((second_out)*height // 4 * width // 4, 10)
+
+        self.h = height // 4
+        self.w = width // 4
+        #self.different = different
+
+    def forward(self, x):
+
+        x = self.conv1(x)
+        #x = self.bn1(x)
+        
+        x = self.pool(x)
+        
+        x = self.conv2(x)
+        #x = self.bn2(x)
         
         x = self.pool(x)    
         
@@ -333,16 +419,16 @@ class KANet5ConvConvC(nn.Module):
 
         if not halfsteps:
 
-            self.conv1 = KAConvC(in_channels, out_channels, kernel_size, order=order)
+            self.conv1 = KAConvCComparision(in_channels, out_channels, kernel_size, order=order)
             self.bn1 = nn.BatchNorm2d(out_channels)
 
-            self.conv2 = KAConvC(out_channels, out_channels, kernel_size, order=order)
+            self.conv2 = KAConvCComparision(out_channels, out_channels, kernel_size, order=order)
             self.bn2 = nn.BatchNorm2d(out_channels)
 
-            self.conv3 = KAConvC(out_channels, second_out, kernel_size, order=order)
+            self.conv3 = KAConvCComparision(out_channels, second_out, kernel_size, order=order)
             self.bn3 = nn.BatchNorm2d(second_out)
 
-            self.conv4 = KAConvC(second_out, second_out, kernel_size, order=order)
+            self.conv4 = KAConvCComparision(second_out, second_out, kernel_size, order=order)
             self.bn4 = nn.BatchNorm2d(second_out)
         
         else:

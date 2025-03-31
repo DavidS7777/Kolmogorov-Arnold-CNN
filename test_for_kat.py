@@ -29,6 +29,7 @@ def cleanup(sig, frame):
 
 import random
 import signal
+from torchviz import make_dot
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -37,8 +38,10 @@ def set_seed(seed):
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    
+    #torch.use_deterministic_algorithms(True)
 
+    
+import gc
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
 
@@ -48,14 +51,14 @@ def main(cfg: DictConfig) -> None:
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ['HYDRA_FULL_ERROR'] = '1'
 
-    set_seed(42)
+    #set_seed(42)
 
-    # batch = 1
-    # in_c = 1
-    # height = 2
-    # width = 2
+    # batch = 64
+    # in_c = 4
+    # height = 28
+    # width = 28
     # ker_size = 3
-    # out_c = 2
+    # out_c = 12
 
     # set_seed(42)
 
@@ -80,25 +83,30 @@ def main(cfg: DictConfig) -> None:
     #                 w = inits.weight[f, c, i, j]
     #                 params.append(nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).view(1, -1).to(device)))
     #                 #m1.kernel[idx].weight_numerator = nn.Parameter(torch.tensor([0.0, w, 0.0, 0.0, 0.0, 0.0]).to(device))
+    #                 #m1.kernel[idx].weight_denominator = nn.Parameter(torch.tensor([0.0, 0.0, 0.0, 0.0]).to(device))
 
     # m1.nums= nn.Parameter(torch.cat(params, dim=0))
+    
     # m2.nums= nn.Parameter(torch.cat(params, dim=0))
 
-    # start = time.time()
-    # m1(data).sum().backward()
-    # print(time.time()-start)
+    # # print(m1.kernel[0].weight_numerator)
+    # # print(m2.nums[0])
 
     # start = time.time()
-    # m2(data).sum().backward()
+    # res1 = m1(data)
     # print(time.time() - start)
 
+    # start = time.time()
+    # res2= m2(data)
+    # print(time.time() - start)
+    
     # # print(res1.shape)
     # # print(res2.shape)
-
-    # # print(torch.equal(res1, res2))
-
-
+    # # #print(torch.equal(res1, res2))
+    # print((res1 - res2).abs().max())
     # exit()
+
+    
 
     model = cfg.model
     name = model.name
@@ -285,6 +293,15 @@ def main(cfg: DictConfig) -> None:
         init_weights(model, False, True)
     elif name == "LeNetConvConvPool":
         model = LeNet5CCPool(in_c, hidden_c, ker_size, out_c).to(device)
+    elif name == "KANetC":
+        #name += f"({model.num}, {model.denom})"
+        model = KANet5C(in_c, hidden_c, ker_size, out_c, (model.num, model.denom)).to(device)
+    
+    elif name == "KANetOneFcCComparision":
+
+        model = KANet5OneFcCComparision(in_c, hidden_c, ker_size, out_c).to(device)
+        init_weights(model, False, True)
+
     else:
         raise NotImplementedError("Model not defined")
     
@@ -343,6 +360,7 @@ def main(cfg: DictConfig) -> None:
     val_loader = DataLoader(dataset=val_data, batch_size=batches, shuffle=False, num_workers=4)
 
     
+    
     if log:
         if cfg.training.name != "None":
             name += f"{cfg.training.name}"
@@ -390,19 +408,28 @@ def main(cfg: DictConfig) -> None:
 
         for (imgs, labels) in train_loader:
 
-            #imgs = transform(imgs)
-            
+            #print("batch")
             imgs = imgs.to(device)
             labels = labels.to(device)
             
             optimizer.zero_grad()
+            
             pred = model(imgs)
-           
+            #make_dot(pred, params=dict(model.named_parameters())).render("graph", format="png")
+            #exit()
             loss = criterion(pred, labels)
             
-            #with profiler.profile(with_stack=True, use_cuda=True) as prof:
-            loss.backward()
+            #start = time.time()
+            with profiler.profile(with_stack=True, use_cuda=True) as prof:
+                loss.backward()
             
+            #exit()
+
+            print(prof.key_averages().table(sort_by="cuda_time_total"))
+            exit()
+            
+            #print("whole bwd:", time.time() - start)
+
             optimizer.step()
 
             with torch.no_grad():
@@ -411,6 +438,9 @@ def main(cfg: DictConfig) -> None:
                 _, predicted = torch.max(pred.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
+            
+            
+
 
         avg_loss = running_loss / len(train_loader)
         accuracy = correct / total
@@ -443,7 +473,10 @@ def main(cfg: DictConfig) -> None:
 
         if log:
             wandb.log({f"val_loss" : avg_loss, "val_accuracy" : accuracy})
-                
+        
+        # print(prof.key_averages().table(sort_by="cuda_time_total"))
+        # exit()
+        
     model.eval()
     correct = 0
     total = 0
@@ -504,5 +537,5 @@ if __name__ == "__main__":
     # s = io.StringIO()
     # sortby = 'cumulative'
     # ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
-    # ps.print_stats(20)
+    # ps.print_stats(30)
     # print(s.getvalue())
