@@ -1,0 +1,11 @@
+name: KASqueezeNet
+batch_size: 128
+in_channels: 3
+hidden_channels: 32
+hidden_channels2: 64
+out_channels: 128
+kernel_size: 3
+bias: False
+num: -1
+denom: -1
+num_classes: 10

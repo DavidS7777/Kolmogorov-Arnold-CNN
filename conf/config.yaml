@@ -4,11 +4,12 @@ defaults:
     
 training:
   epochs: 20
-  optimizer: adam
-  log: True
-  size: 5000
+  optimizer: adamw
+  log: False
+  size: 100000
   learning_rate: 0.001
   tag: None
   name: None
   decay: 0
   dataset: Fashion-MNIST
+  label_smoothing: 0

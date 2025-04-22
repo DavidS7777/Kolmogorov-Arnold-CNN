@@ -1,0 +1,10 @@
+name: KAWideCNN
+batch_size: 128
+in_channels: 1
+hidden_channels: 32
+hidden_channels2: 64
+out_channels: 128
+kernel_size: 3
+bias: False
+num: 5
+denom: 4
