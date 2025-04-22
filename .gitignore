@@ -10,3 +10,7 @@ wandb/
 build/
 dist/
 *.egg-info
+tiny-imagenet-200/
+data/
+*.ncu-rep
+pics/
