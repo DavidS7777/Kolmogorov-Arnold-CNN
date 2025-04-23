@@ -60,7 +60,7 @@ class KAConv(nn.Module):
 
         in_channels(int) = number of input channels
 
-        out_channels(int) = number of output channels / filter
+        out_channels(int) = number of output channels or filters
         
         kernel_size(int) = 1d shape of kernel, kernel will be quadratic
 
@@ -81,7 +81,7 @@ class KAConv(nn.Module):
         self.stride = 1
         self.bias_enabled = bias
 
-        self.numerator = order[0] + 1 if order[0] != -1 else -1
+        self.numerator = order[0] + 1 if order[0] != -1 else -1 #numerator = -1 means diasbling the a_0 computation inside of the kernel to be able to create the identity function with P and Q
         self.denominator = order[1]
 
         num = torch.tensor([0.0, 1.0, 0.0, 0.0, 0.0, 0.0], dtype=torch.float32)
